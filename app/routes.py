@@ -1,8 +1,6 @@
 from flask import Blueprint, render_template, request, redirect, url_for, flash, make_response, current_app,jsonify,send_file
-import shutil
-import os
-import zipfile
-import subprocess
+import os,shutil,zipfile,io,sqlite3
+
 from datetime import datetime
 
 from .models import db, Produits, Factures, Ventes, Benefices, Panier, TransactionsProduit, Depenses, TransactionDepot, Caisse, CompteBancaire, User, bcrypt, ProduitsEnRoute,Paiements
@@ -1332,85 +1330,49 @@ def modifier_produit_en_route(id):
 @permission_required('gestion_utilisateurs')
 def telecharger_base_donnees():
     try:
-        # Obtenir le chemin de la base de données
         db_uri = current_app.config.get('SQLALCHEMY_DATABASE_URI')
-        
-        # Extraire le chemin du fichier de la URI (pour SQLite)
+
         if db_uri.startswith('sqlite:///'):
             db_file = db_uri.replace('sqlite:///', '')
-            db_file = db_file.replace('/', '\\')
-            
+
             if not os.path.exists(db_file):
                 flash("Fichier de base de données introuvable!", "danger")
                 return redirect(url_for('routes.gestion_utilisateurs'))
-            
-            # Créer un dossier temporaire
-            temp_dir = os.path.join(current_app.config['UPLOAD_FOLDER'], 'temp')
+
+            # Utiliser /tmp sur Render
+            temp_dir = os.path.join('/tmp', 'backups')
             os.makedirs(temp_dir, exist_ok=True)
-            
+
             timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
             backup_folder = os.path.join(temp_dir, f"backup_{timestamp}")
             os.makedirs(backup_folder, exist_ok=True)
-            
+
             # 1. Copier le fichier SQLite
             sqlite_filename = f"backup_{timestamp}.db"
             sqlite_path = os.path.join(backup_folder, sqlite_filename)
             shutil.copy(db_file, sqlite_path)
-            
-            # 2. Générer le fichier SQL
+
+            # 2. Générer le fichier SQL avec sqlite3 en Python
             sql_filename = f"backup_{timestamp}.sql"
             sql_path = os.path.join(backup_folder, sql_filename)
-            
-            try:
-                # Utiliser sqlite3 pour exporter en SQL
-                subprocess.run(
-                    f'sqlite3 "{db_file}" ".dump" > "{sql_path}"',
-                    shell=True,
-                    check=True,
-                    capture_output=True
-                )
-            except subprocess.CalledProcessError as e:
-                flash(f"Erreur lors de la génération du SQL: {str(e)}", "warning")
-            
-            # 3. Créer un fichier ZIP contenant les deux formats
+
+            conn = sqlite3.connect(db_file)
+            with open(sql_path, 'w', encoding='utf-8') as f:
+                for line in conn.iterdump():
+                    f.write(f"{line}\n")
+            conn.close()
+
+            # 3. Créer un fichier ZIP
             zip_filename = f"backup_base_donnees_{timestamp}.zip"
             zip_path = os.path.join(temp_dir, zip_filename)
-            
+
             with zipfile.ZipFile(zip_path, 'w', zipfile.ZIP_DEFLATED) as zipf:
-                # Ajouter le fichier SQLite
                 zipf.write(sqlite_path, arcname=sqlite_filename)
-                
-                # Ajouter le fichier SQL s'il existe
-                if os.path.exists(sql_path):
-                    zipf.write(sql_path, arcname=sql_filename)
-                
-                # Ajouter un fichier README
-                readme_content = f"""SAUVEGARDE DE LA BASE DE DONNÉES
-================================
+                zipf.write(sql_path, arcname=sql_filename)
+                zipf.writestr('README.txt', f"Sauvegarde créée le {datetime.now()}")
 
-Date: {datetime.now().strftime('%d/%m/%Y %H:%M:%S')}
-
-Contenu du ZIP:
-- {sqlite_filename}: Base de données au format SQLite
-- {sql_filename}: Dump SQL complète de la base de données
-
-Comment restaurer:
-
-1. À partir du fichier SQLite (.db):
-   - Copier le fichier .db au même endroit que l'original
-
-2. À partir du fichier SQL (.sql):
-   - Ouvrir une invite de commande dans le dossier du fichier
-   - Exécuter: sqlite3 nouvelle_base.db < backup_*.sql
-
-Pour plus d'informations, consultez la documentation SQLite.
-"""
-                zipf.writestr('README.txt', readme_content)
-            
-            # Nettoyer le dossier temporaire
             shutil.rmtree(backup_folder)
-            
-            # Télécharger le fichier ZIP
+
             return send_file(
                 zip_path,
                 as_attachment=True,
@@ -1418,9 +1380,9 @@ Pour plus d'informations, consultez la documentation SQLite.
                 mimetype='application/zip'
             )
         else:
-            flash("Type de base de données non supporté pour le téléchargement!", "danger")
+            flash("Type de base de données non supporté!", "danger")
             return redirect(url_for('routes.gestion_utilisateurs'))
-            
+
     except Exception as e:
-        flash(f"Erreur lors du téléchargement de la base de données: {str(e)}", "danger")
+        flash(f"Erreur lors du téléchargement: {str(e)}", "danger")
         return redirect(url_for('routes.gestion_utilisateurs'))
