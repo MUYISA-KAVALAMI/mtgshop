@@ -49,7 +49,7 @@ def create_app():
         try:
             from keep_alive_advanced import KeepAliveService
             
-            app_url = os.environ.get('APP_URL', 'https://votre-app.onrender.com')
+            app_url = os.environ.get('APP_URL', 'https://mtgshop-of2m.onrender.com/')
             keep_alive = KeepAliveService(
                 app_url=app_url,
                 interval_minutes=10
